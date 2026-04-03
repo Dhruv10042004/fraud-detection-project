@@ -1,14 +1,27 @@
 package com.example.demo.model;
 
-import jakarta.validation.constraints.Max;
-import jakarta.validation.constraints.Min;
-import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.PositiveOrZero;
+import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import jakarta.validation.constraints.*;
 
 public class TransactionRequest {
+
+    @NotBlank
+    @JsonProperty("user_id")
+    @JsonAlias("userId")
+    private String userId;
+
+    @NotBlank
+    private String timestamp;
+
     @NotNull
     @PositiveOrZero
     private Double amount;
+
+    @NotNull
+    @JsonProperty("log_amount")
+    @JsonAlias("logAmount")
+    private Double logAmount;
 
     @NotNull
     @Min(0)
@@ -18,25 +31,88 @@ public class TransactionRequest {
     @NotNull
     @Min(0)
     @Max(6)
-    private Integer day_of_week;
+    @JsonProperty("day_of_week")
+    @JsonAlias("dayOfWeek")
+    private Integer dayOfWeek;
 
     @NotNull
-    private Double amount_diff;
+    @Min(1)
+    @Max(12)
+    private Integer month;
+
+    @NotNull
+    @Min(0)
+    @Max(1)
+    @JsonProperty("is_weekend")
+    @JsonAlias("isWeekend")
+    private Integer isWeekend;
+
+    @NotNull
+    @Min(0)
+    @Max(1)
+    @JsonProperty("is_night")
+    @JsonAlias("isNight")
+    private Integer isNight;
+
+    @NotNull
+    @JsonProperty("amount_diff")
+    @JsonAlias("amountDiff")
+    private Double amountDiff;
 
     @NotNull
     @PositiveOrZero
-    private Double time_diff;
+    @JsonProperty("time_diff")
+    @JsonAlias("timeDiff")
+    private Double timeDiff;
 
     @NotNull
     @PositiveOrZero
-    private Double amount_velocity;
+    @JsonProperty("amount_velocity")
+    @JsonAlias("amountVelocity")
+    private Double amountVelocity;
 
     @NotNull
     @PositiveOrZero
-    private Double rolling_avg;
+    @JsonProperty("rolling_avg")
+    @JsonAlias("rollingAvg")
+    private Double rollingAvg;
+
+    @NotNull
+    @PositiveOrZero
+    @JsonProperty("rolling_std")
+    @JsonAlias("rollingStd")
+    private Double rollingStd;
 
     @NotNull
     private Double deviation;
+
+    @NotNull
+    @JsonProperty("z_score")
+    @JsonAlias("zScore")
+    private Double zScore;
+
+    @NotNull
+    @PositiveOrZero
+    @JsonProperty("user_txn_count")
+    @JsonAlias("userTxnCount")
+    private Integer userTxnCount;
+
+    // Getters & Setters
+    public String getUserId() {
+        return userId;
+    }
+
+    public void setUserId(String userId) {
+        this.userId = userId;
+    }
+
+    public String getTimestamp() {
+        return timestamp;
+    }
+
+    public void setTimestamp(String timestamp) {
+        this.timestamp = timestamp;
+    }
 
     public Double getAmount() {
         return amount;
@@ -44,6 +120,14 @@ public class TransactionRequest {
 
     public void setAmount(Double amount) {
         this.amount = amount;
+    }
+
+    public Double getLogAmount() {
+        return logAmount;
+    }
+
+    public void setLogAmount(Double logAmount) {
+        this.logAmount = logAmount;
     }
 
     public Integer getHour() {
@@ -54,44 +138,76 @@ public class TransactionRequest {
         this.hour = hour;
     }
 
-    public Integer getDay_of_week() {
-        return day_of_week;
+    public Integer getDayOfWeek() {
+        return dayOfWeek;
     }
 
-    public void setDay_of_week(Integer day_of_week) {
-        this.day_of_week = day_of_week;
+    public void setDayOfWeek(Integer dayOfWeek) {
+        this.dayOfWeek = dayOfWeek;
     }
 
-    public Double getAmount_diff() {
-        return amount_diff;
+    public Integer getMonth() {
+        return month;
     }
 
-    public void setAmount_diff(Double amount_diff) {
-        this.amount_diff = amount_diff;
+    public void setMonth(Integer month) {
+        this.month = month;
     }
 
-    public Double getTime_diff() {
-        return time_diff;
+    public Integer getIsWeekend() {
+        return isWeekend;
     }
 
-    public void setTime_diff(Double time_diff) {
-        this.time_diff = time_diff;
+    public void setIsWeekend(Integer isWeekend) {
+        this.isWeekend = isWeekend;
     }
 
-    public Double getAmount_velocity() {
-        return amount_velocity;
+    public Integer getIsNight() {
+        return isNight;
     }
 
-    public void setAmount_velocity(Double amount_velocity) {
-        this.amount_velocity = amount_velocity;
+    public void setIsNight(Integer isNight) {
+        this.isNight = isNight;
     }
 
-    public Double getRolling_avg() {
-        return rolling_avg;
+    public Double getAmountDiff() {
+        return amountDiff;
     }
 
-    public void setRolling_avg(Double rolling_avg) {
-        this.rolling_avg = rolling_avg;
+    public void setAmountDiff(Double amountDiff) {
+        this.amountDiff = amountDiff;
+    }
+
+    public Double getTimeDiff() {
+        return timeDiff;
+    }
+
+    public void setTimeDiff(Double timeDiff) {
+        this.timeDiff = timeDiff;
+    }
+
+    public Double getAmountVelocity() {
+        return amountVelocity;
+    }
+
+    public void setAmountVelocity(Double v) {
+        this.amountVelocity = v;
+    }
+
+    public Double getRollingAvg() {
+        return rollingAvg;
+    }
+
+    public void setRollingAvg(Double rollingAvg) {
+        this.rollingAvg = rollingAvg;
+    }
+
+    public Double getRollingStd() {
+        return rollingStd;
+    }
+
+    public void setRollingStd(Double rollingStd) {
+        this.rollingStd = rollingStd;
     }
 
     public Double getDeviation() {
@@ -100,5 +216,21 @@ public class TransactionRequest {
 
     public void setDeviation(Double deviation) {
         this.deviation = deviation;
+    }
+
+    public Double getZScore() {
+        return zScore;
+    }
+
+    public void setZScore(Double zScore) {
+        this.zScore = zScore;
+    }
+
+    public Integer getUserTxnCount() {
+        return userTxnCount;
+    }
+
+    public void setUserTxnCount(Integer c) {
+        this.userTxnCount = c;
     }
 }

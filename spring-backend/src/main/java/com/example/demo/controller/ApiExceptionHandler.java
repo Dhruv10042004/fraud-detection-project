@@ -1,56 +1,64 @@
 package com.example.demo.controller;
 
-import jakarta.validation.ConstraintViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
-import org.springframework.web.client.RestClientException;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.util.LinkedHashMap;
+import java.time.Instant;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.stream.Collectors;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
 
+    /** Validation errors (@Valid failures) */
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<Map<String, Object>> handleValidation(MethodArgumentNotValidException ex) {
-        String message = ex.getBindingResult()
-            .getFieldErrors()
-            .stream()
-            .map(error -> error.getField() + ": " + error.getDefaultMessage())
-            .collect(Collectors.joining(", "));
+    public ResponseEntity<Map<String, Object>> handleValidation(
+            MethodArgumentNotValidException ex) {
 
-        return buildResponse(HttpStatus.BAD_REQUEST, message);
+        Map<String, String> fieldErrors = ex.getBindingResult()
+                .getFieldErrors()
+                .stream()
+                .collect(Collectors.toMap(
+                        FieldError::getField,
+                        fe -> fe.getDefaultMessage() == null ? "invalid" : fe.getDefaultMessage(),
+                        (a, b) -> a));
+
+        return ResponseEntity
+                .status(HttpStatus.BAD_REQUEST)
+                .body(error(HttpStatus.BAD_REQUEST, "Validation failed", fieldErrors));
     }
 
-    @ExceptionHandler(ConstraintViolationException.class)
-    public ResponseEntity<Map<String, Object>> handleConstraintViolation(ConstraintViolationException ex) {
-        return buildResponse(HttpStatus.BAD_REQUEST, ex.getMessage());
-    }
-
-    @ExceptionHandler(RestClientException.class)
-    public ResponseEntity<Map<String, Object>> handleMlConnectionError(RestClientException ex) {
-        return buildResponse(HttpStatus.BAD_GATEWAY, "Unable to reach ML service: " + ex.getMessage());
-    }
-
+    /** ML service unreachable / bad response */
     @ExceptionHandler(ResponseStatusException.class)
-    public ResponseEntity<Map<String, Object>> handleResponseStatus(ResponseStatusException ex) {
-        return buildResponse(HttpStatus.valueOf(ex.getStatusCode().value()), ex.getReason());
+    public ResponseEntity<Map<String, Object>> handleResponseStatus(
+            ResponseStatusException ex) {
+        return ResponseEntity
+                .status(ex.getStatusCode())
+                .body(error((HttpStatus) ex.getStatusCode(), ex.getReason(), null));
     }
 
+    /** Catch-all */
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<Map<String, Object>> handleUnexpectedError(Exception ex) {
-        return buildResponse(HttpStatus.INTERNAL_SERVER_ERROR, "Unexpected backend error: " + ex.getMessage());
+    public ResponseEntity<Map<String, Object>> handleGeneral(Exception ex) {
+        return ResponseEntity
+                .status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(error(HttpStatus.INTERNAL_SERVER_ERROR, ex.getMessage(), null));
     }
 
-    private ResponseEntity<Map<String, Object>> buildResponse(HttpStatus status, String message) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("status", status.value());
-        payload.put("error", message);
-        return ResponseEntity.status(status).body(payload);
+    private Map<String, Object> error(HttpStatus status, String message, Object details) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("timestamp", Instant.now().toString());
+        body.put("status", status.value());
+        body.put("error", status.getReasonPhrase());
+        body.put("message", message);
+        if (details != null)
+            body.put("details", details);
+        return body;
     }
 }
