@@ -1,60 +1,119 @@
-# Fraud Detection Architecture
+# Sentinel Fraud Project
 
-This project now follows a clear three-service flow:
+Sentinel is a three-service fraud detection demo:
 
-1. `frontend` is the React UI where a user enters transaction features.
-2. `spring-backend` is the orchestration layer that validates requests and forwards them to the ML service.
-3. `ml-service` is the FastAPI inference service that loads the trained model, scores the transaction, and returns explanations.
+- `frontend/`: React SOC dashboard and manual simulators
+- `spring-backend/`: Spring Boot gateway, validation layer, and session-state store
+- `ml-service/`: FastAPI inference service for transaction, login, SHAP, and graph risk
+
+## Architecture
 
 ```text
-React UI (:3000)
-   -> Spring Boot API (/fraud/predict on :8080)
-      -> FastAPI ML service (/predict on :8000)
-         -> model + scaler + SHAP explainer
+React dashboard (:3000)
+  -> Spring Boot API (:8080/fraud/*)
+    -> FastAPI ML service (:8000/*)
 ```
 
-## What Was Fixed
+The dashboard is now live-only:
 
-- Removed hardcoded architecture assumptions from the UI and backend by making endpoints configurable.
-- Added backend validation so incomplete or invalid transaction payloads are rejected before hitting the model.
-- Added centralized backend error handling for validation failures and ML connectivity problems.
-- Replaced the ML service's untyped `dict` API with explicit request/response models.
-- Added a health endpoint to the ML service.
-- Updated the frontend so it reflects the actual architecture and handles API errors more cleanly.
+- no UI mock bootstrap
+- no fake fallback alerts or login anomalies
+- no background auto-generated events
+- visible results are based on values submitted through the full React -> Spring -> Python -> Spring -> React round trip
 
-## Run The System
+## Main Flows
+
+Transaction simulation:
+
+1. React builds a transaction payload from the simulator form.
+2. Spring validates the request and forwards it to Python `POST /predict/event`.
+3. Python returns ML score, SHAP explanation, graph lookup, combined risk, and action.
+4. Spring stores the event in dashboard state.
+5. React refreshes the stored snapshot and renders the returned result.
+
+Login simulation:
+
+1. React builds a login payload from the simulator form.
+2. Spring validates the request and forwards it to Python `POST /predict/login`.
+3. Python returns the Isolation Forest anomaly score.
+4. Spring stores the login in dashboard state.
+5. React refreshes the stored snapshot and renders the returned result.
+
+## Run Locally
 
 ### 1. Start the ML service
 
-From `C:\Users\dhruv\Downloads\fraud-project\ml-service`:
+From [ml-service](c:\Users\dhruv\Downloads\fraud-project\ml-service):
 
 ```powershell
 uvicorn ml_service:app --reload --port 8000
 ```
 
-### 2. Start the Spring backend
+### 2. Start Spring Boot
 
-From `C:\Users\dhruv\Downloads\fraud-project\spring-backend`:
+From [spring-backend](c:\Users\dhruv\Downloads\fraud-project\spring-backend):
 
 ```powershell
 ./mvnw spring-boot:run
 ```
 
-The backend uses `app.ml.predict-url=http://localhost:8000/predict` by default.
+Default ML base URL is `http://localhost:8000`.
 
 ### 3. Start the frontend
 
-From `C:\Users\dhruv\Downloads\fraud-project\frontend`:
+From [frontend](c:\Users\dhruv\Downloads\fraud-project\frontend):
 
 ```powershell
 npm start
 ```
 
-If you want a different backend URL, copy `.env.example` to `.env` and set `REACT_APP_API_BASE_URL`.
+The frontend defaults to `http://localhost:8080`.
 
-## Architecture Notes
+## Important Endpoints
 
-- The frontend should only call the Spring API, not the ML service directly.
-- The backend owns input validation and integration concerns.
-- The ML service owns model loading, prediction, and explanation generation.
-- This separation makes it easier to swap models or scale inference independently without changing the UI contract.
+Spring Boot:
+
+- `GET /fraud/health`
+- `GET /fraud/model/info`
+- `POST /fraud/event`
+- `POST /fraud/predict/transaction`
+- `POST /fraud/predict/login`
+- `GET /fraud/graph/risk/{userId}`
+- `GET /fraud/graph/risk`
+- `GET /fraud/dashboard/snapshot`
+- `POST /fraud/batch`
+
+FastAPI:
+
+- `GET /health`
+- `GET /model/info`
+- `POST /predict/event`
+- `POST /predict/transaction`
+- `POST /predict/login`
+- `GET /graph/risk/{userId}`
+- `GET /graph/risk/all`
+- `POST /batch/transactions`
+
+## Verification
+
+Useful local checks:
+
+```powershell
+# frontend
+cd frontend
+npm run build
+
+# spring backend
+cd ../spring-backend
+./mvnw -q -DskipTests compile
+
+# python service
+cd ../ml-service
+python -m py_compile ml_service.py
+```
+
+## Folder Guides
+
+- [frontend/README.md](c:\Users\dhruv\Downloads\fraud-project\frontend\README.md)
+- [spring-backend/README.md](c:\Users\dhruv\Downloads\fraud-project\spring-backend\README.md)
+- [ml-service/README.md](c:\Users\dhruv\Downloads\fraud-project\ml-service\README.md)

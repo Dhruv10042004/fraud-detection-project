@@ -1,70 +1,55 @@
-# Getting Started with Create React App
+# Frontend
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+This folder contains the React SOC dashboard.
 
-## Available Scripts
+## What It Does
 
-In the project directory, you can run:
+- shows recent stored alerts from Spring
+- renders the fraud graph, timeline, AI explanation, and login heatmap
+- provides manual transaction and login simulators
+- refreshes dashboard panels from `GET /fraud/dashboard/snapshot`
 
-### `npm start`
+## Live-Only Behavior
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+The frontend is configured to avoid fake demo data:
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+- it starts with empty state
+- it does not fabricate fallback alerts or login anomalies
+- it does not auto-generate background events
+- simulator results only appear after the live backend pipeline returns
 
-### `npm test`
+## Key Files
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+- [src/App.js](c:\Users\dhruv\Downloads\fraud-project\frontend\src\App.js): main dashboard UI and simulator flows
+- [src/App.css](c:\Users\dhruv\Downloads\fraud-project\frontend\src\App.css): dashboard styling
+- [src/api.js](c:\Users\dhruv\Downloads\fraud-project\frontend\src\api.js): Spring API client
 
-### `npm run build`
+## Commands
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+From this folder:
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+```powershell
+npm install
+npm start
+npm run build
+```
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+## Configuration
 
-### `npm run eject`
+Environment variable:
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+- `REACT_APP_API_URL`
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+Default API base:
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+- `http://localhost:8080`
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+## Expected Backend Contract
 
-## Learn More
+The frontend expects Spring Boot to expose:
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
-
-### Code Splitting
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
-
-### Analyzing the Bundle Size
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+- `GET /fraud/health`
+- `GET /fraud/model/info`
+- `GET /fraud/dashboard/snapshot`
+- `POST /fraud/event`
+- `POST /fraud/predict/login`

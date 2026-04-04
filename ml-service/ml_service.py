@@ -58,6 +58,21 @@ def _load(name: str) -> Any:
     return joblib.load(path)
 
 
+def _load_optional(name: str) -> Any:
+    path = BASE_DIR / name
+    if not path.exists():
+        return None
+    return joblib.load(path)
+
+
+def _load_first_available(*names: str) -> Any:
+    for name in names:
+        path = BASE_DIR / name
+        if path.exists():
+            return joblib.load(path)
+    return None
+
+
 # XGBoost classifier
 xgb_model: xgb.XGBClassifier = _load("xgboost_fraud_model.pkl")
 
@@ -69,6 +84,7 @@ shap_explainer = _load("shap_explainer (1).pkl")
 
 # Isolation Forest (login / behavioral anomaly)
 iso_forest = _load("isolation_forest_model (1).pkl")
+login_scaler = _load_first_available("scaler.pkl", "scaler (1).pkl")
 
 # Graph risk scores {user_id -> float}
 graph_risk_scores: Dict[str, float] = _load("graph_risk_scores (1).pkl")
@@ -185,7 +201,7 @@ class LoginRequest(BaseModel):
     hour:              int   = Field(..., ge=0, le=23)
     day_of_week:       int   = Field(..., ge=0, le=6, validation_alias=AliasChoices("day_of_week", "dayOfWeek"))
     hour_deviation:    float = Field(..., description="Abs deviation from user's usual login hour", validation_alias=AliasChoices("hour_deviation", "hourDeviation"))
-    time_diff:         float = Field(..., description="Minutes since last login", validation_alias=AliasChoices("time_diff", "timeDiff"))
+    time_diff:         float = Field(..., description="Hours since last login", validation_alias=AliasChoices("time_diff", "timeDiff"))
     dormant_login:     int   = Field(..., ge=0, le=1, description="1 if >30d since last login", validation_alias=AliasChoices("dormant_login", "dormantLogin"))
     login_freq_7d:     int   = Field(..., description="Number of logins in last 7 days", validation_alias=AliasChoices("login_freq_7d", "loginFreq7d"))
     dist_from_home:    float = Field(..., description="km from home city centroid", validation_alias=AliasChoices("dist_from_home", "distFromHome"))
@@ -333,10 +349,21 @@ def _isolation_forest_score(features: np.ndarray) -> float:
     Isolation Forest decision_function returns negative = more anomalous.
     We flip and normalise to [0, 1].
     """
-    raw = iso_forest.decision_function(features)[0]
+    model_features = login_scaler.transform(features) if login_scaler is not None else features
+    raw = iso_forest.decision_function(model_features)[0]
     # Raw is roughly in [-0.5, 0.5]; clip & normalise to [0, 1]
     normalised = float(np.clip(0.5 - raw, 0.0, 1.0))
     return normalised
+
+
+def _coerce_login_features(req: LoginRequest) -> LoginRequest:
+    """
+    Keep login features aligned with the Isolation Forest training distribution.
+    Older UI payloads sent time_diff in minutes; the model was trained on hours.
+    """
+    if req.time_diff > 72:
+        req.time_diff = round(req.time_diff / 60.0, 6)
+    return req
 
 
 def _shap_explain(scaled_features: np.ndarray) -> List[SHAPExplanation]:
@@ -478,6 +505,7 @@ def predict_login(req: LoginRequest) -> dict:
     Spring Boot calls this on each login event.
     """
     try:
+        req = _coerce_login_features(req)
         values = [getattr(req, f) for f in LOGIN_FEATURES]
         X = np.array([values], dtype=float)
 
@@ -542,6 +570,7 @@ def predict_event(req: FraudEventRequest) -> FraudEventResponse:
             # Only run Isolation Forest when a login payload is also provided.
             anomaly_score: Optional[float] = None
             if req.login:
+                req.login = _coerce_login_features(req.login)
                 login_vals = [getattr(req.login, f) for f in LOGIN_FEATURES]
                 login_X    = np.array([login_vals], dtype=float)
                 anomaly_score = round(_isolation_forest_score(login_X), 6)
@@ -555,6 +584,7 @@ def predict_event(req: FraudEventRequest) -> FraudEventResponse:
 
         elif req.login:
             # ── Login-only path: use IF for risk signal ──
+            req.login = _coerce_login_features(req.login)
             values = [getattr(req.login, f) for f in LOGIN_FEATURES]
             X      = np.array([values], dtype=float)
             ml_score = _isolation_forest_score(X)
@@ -689,6 +719,8 @@ def model_info() -> dict:
         "isolation_forest": {
             "n_estimators":         iso_forest.n_estimators,
             "features":             LOGIN_FEATURES,
+            "uses_scaler":          login_scaler is not None,
+            "time_diff_unit":       "hours",
         },
         "risk_scoring": {
             "ml_weight":    ML_WEIGHT,

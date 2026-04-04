@@ -6,11 +6,230 @@ import {
 } from './MockData.js';
 import './App.css';
 
-// ─── constants ────────────────────────────────────────────────────────────────
+const graphEdgeColor = (edge) => {
+  if (edge?.kind === 'customer_employee') return 'rgba(255,214,10,0.5)';
+  if (edge?.kind === 'customer_device' || edge?.kind === 'login_device') return 'rgba(191,90,242,0.5)';
+  return 'rgba(255,255,255,0.28)';
+};
+
+const graphSegmentLabel = (node, edge) => {
+  if (edge?.kind === 'customer_employee') return 'Customer linked to employee path';
+  if (edge?.kind === 'customer_device' || edge?.kind === 'login_device') return 'Customer linked to device path';
+  if (!node) return 'Unknown path';
+  if (node.type === 'employee') return 'Internal employee fraud path';
+  if (node.type === 'device') return 'External device fraud path';
+  if (node.segment === 'internal') return 'Customer linked to employee path';
+  return 'Customer linked to device path';
+};
+
+const loginSignals = (login) => {
+  const signals = [];
+  if (Number(login.isNewDevice)) signals.push('New device detected');
+  if (Number(login.vpn)) signals.push('VPN or masked network');
+  if (Number(login.impossibleTravel)) signals.push('Impossible travel pattern');
+  if (Number(login.dormantLogin)) signals.push('Dormant account reactivated');
+  if (Number(login.distFromHome) >= 75) signals.push('Far from home location');
+  if (Number(login.hourDeviation) >= 4) signals.push('Odd login hour');
+  if (Number(login.speed) >= 500) signals.push('Travel speed unrealistic');
+  if (Number(login.timeDiff) <= 0.5) signals.push('Rapid login sequence');
+  return signals;
+};
+
+const graphNodeLabel = (node) => {
+  if (!node) return 'No graph node selected';
+  return node.label || graphSegmentLabel(node, null);
+};
+
+const graphRelationLabel = (edge) => edge?.label || 'Observed relationship';
+
+const graphPriorityLabel = (edge, index) => {
+  if (index === 0) return 'Primary';
+  if (index === 1) return 'High relevance';
+  return 'Supporting';
+};
+
+const graphRelationPriority = (edge) => {
+  if (!edge) return 0;
+  if (edge.kind === 'customer_employee') return 4;
+  if (edge.kind === 'customer_device') return 3;
+  if (edge.kind === 'login_device') return 2;
+  return 1;
+};
+
+const sortGraphEdges = (edges) => [...edges].sort((a, b) => {
+  const priorityGap = graphRelationPriority(b) - graphRelationPriority(a);
+  if (priorityGap !== 0) return priorityGap;
+  return Number(b.weight || 0) - Number(a.weight || 0);
+});
+
+const primaryGraphReason = (node, edges) => {
+  if (!node) return 'No node selected';
+  const topEdge = sortGraphEdges(edges)[0];
+  const nodeRisk = Number(node?.risk || 0);
+  if (topEdge?.kind === 'customer_employee') {
+    return nodeRisk >= 0.7
+      ? 'Primary reason: the customer sits in a high-risk employee-linked network path'
+      : 'Primary reason: employee-linked activity is the clearest visible risk signal';
+  }
+  if (topEdge?.kind === 'customer_device' || topEdge?.kind === 'login_device') {
+    return nodeRisk >= 0.7
+      ? 'Primary reason: repeated device-linked exposure keeps this node in a high-risk network zone'
+      : 'Primary reason: risky device activity is the clearest visible risk signal';
+  }
+  if (node.type === 'employee') return 'Primary reason: employee node is directly implicated';
+  if (node.type === 'device') return 'Primary reason: device reuse / device risk is elevated';
+  return nodeRisk >= 0.7
+    ? 'Primary reason: this customer remains high-risk because of cumulative network connections'
+    : 'Primary reason: customer risk is elevated in the network';
+};
+
+const transactionSignals = (form) => {
+  const signals = [];
+  if ((form.employeeId || '').trim()) signals.push('Employee touched this customer');
+  if ((form.deviceId || '').trim()) signals.push(`Device ${form.deviceId} present in graph path`);
+  if (Number(form.isNight)) signals.push('After-hours activity');
+  if (Math.abs(Number(form.zScore)) >= 3) signals.push('Transaction far from normal baseline');
+  if (Number(form.amountVelocity) >= 15) signals.push('High value movement over short interval');
+  if (Number(form.timeDiff) <= 20) signals.push('Compressed transaction timing');
+  return signals;
+};
+
+const formatActionCode = (code) => code ? code.replace(/_/g, ' ') : 'No action';
+
+const loginRiskBand = (score) => {
+  if (score >= 0.7) return 'high';
+  if (score >= 0.55) return 'suspicious';
+  if (score >= 0.4) return 'elevated';
+  return 'low';
+};
+
+const buildTransactionExplanation = ({ request, response }) => {
+  const reasons = [];
+  const shap = response?.transaction_result?.shap_explanation || [];
+  const topShap = shap
+    .filter((item) => item.direction === 'increases risk' && Number(item.shap_value) > 0)
+    .slice(0, 3)
+    .map((item) => `${item.feature} increased risk (${fmt(item.shap_value, 4)})`);
+  const combinedRisk = Number(response?.combined_risk_score || 0);
+  const graphRisk = Number(response?.graph_result?.graph_risk_score || 0);
+  const internal = Boolean(request?.employeeId);
+
+  if (request?.employeeId && combinedRisk >= 0.4) {
+    reasons.push(`Employee ${request.employeeId} is linked to customer ${request.userId} in this event path.`);
+  }
+  if (request?.deviceId && graphRisk >= 0.4) {
+    reasons.push(`Device ${request.deviceId} was part of the scored graph path for this event.`);
+  }
+  if (Number(request?.isNight)) {
+    reasons.push(`The activity happened during an after-hours window at ${String(request?.hour ?? 0).padStart(2, '0')}:00.`);
+  }
+  if (Math.abs(Number(request?.zScore || 0)) >= 3) {
+    reasons.push(`The transaction deviated sharply from baseline with z-score ${fmt(request?.zScore || 0, 2)}.`);
+  }
+  if (Number(request?.amountVelocity || 0) >= 15) {
+    reasons.push(`Funds moved quickly relative to the prior gap, with velocity ${fmt(request?.amountVelocity || 0, 2)}.`);
+  }
+  if (topShap.length) {
+    reasons.push(`Top model drivers: ${topShap.join('; ')}.`);
+  }
+  if (combinedRisk >= 0.7) {
+    reasons.push(`Combined risk reached ${fmt(combinedRisk)} with graph risk ${fmt(graphRisk)}.`);
+  }
+  if (combinedRisk < 0.4 || reasons.length === 0) {
+    return null;
+  }
+  return {
+    severity: response?.security_action?.severity || 'medium',
+    title: internal ? 'Internal Fraud Explanation' : 'Customer Fraud Explanation',
+    summary: internal
+      ? `Manager escalation created for customer ${request?.userId} because the employee-linked transaction path looks suspicious.`
+      : `Customer protection response created for ${request?.userId} because the device-linked transaction path looks suspicious.`,
+    target: internal ? `Manager for ${request?.employeeId}` : `Customer ${request?.userId}`,
+    notification: internal
+      ? `Manager and SOC notified about employee-linked risk on ${request?.userId}.`
+      : `Customer notified about unusual activity on account ${request?.userId}.`,
+    action: formatActionCode(response?.security_action?.code),
+    reasons,
+  };
+};
+
+const buildLoginExplanation = ({ request, response }) => {
+  const reasons = [];
+  const score = Number(response?.anomaly_score || 0);
+  const band = loginRiskBand(score);
+  if (Number(request?.isNewDevice)) {
+    reasons.push(`New device detected: D${String(request?.deviceCode ?? 0).padStart(3, '0')}.`);
+  }
+  if (Number(request?.vpn)) {
+    reasons.push('The login came through a VPN or masked network.');
+  }
+  if (Number(request?.impossibleTravel)) {
+    reasons.push(`Travel pattern is impossible: ${fmt(request?.distance || 0, 1)} km with implied speed ${fmt(request?.speed || 0, 1)} km/h.`);
+  }
+  if (Number(request?.distFromHome || 0) >= 75) {
+    reasons.push(`Login location is ${fmt(request?.distFromHome || 0, 1)} km away from the customer home area.`);
+  }
+  if (Number(request?.hourDeviation || 0) >= 4) {
+    reasons.push(`Login hour deviates by ${fmt(request?.hourDeviation || 0, 1)} hours from the user pattern.`);
+  }
+  if (Number(request?.timeDiff || 0) <= 0.5) {
+    reasons.push(`The event followed the last login after only ${fmt(request?.timeDiff || 0, 2)} hours.`);
+  }
+  if (Number(request?.dormantLogin)) {
+    reasons.push('The account resumed activity after a dormant period.');
+  }
+  if (score >= 0.55) {
+    reasons.push(`Isolation Forest anomaly score reached ${fmt(score)}.`);
+  }
+  if (score < 0.4 || reasons.length === 0) {
+    return null;
+  }
+  return {
+    severity: band === 'high' ? 'high' : 'medium',
+    title: band === 'high' ? 'Login Anomaly Explanation' : 'Suspicious Login Explanation',
+    summary: `Customer ${request?.userId} triggered a ${band === 'high' ? 'high-risk' : 'suspicious'} login review because the pattern contains unusual signals.`,
+    target: `Customer ${request?.userId}`,
+    notification: `Customer ${request?.userId} notified to verify this login attempt.`,
+    action: band === 'high' ? 'Customer verification requested' : 'Step-up review recommended',
+    reasons,
+  };
+};
+
+function ExplanationPopup({ popup, onClose }) {
+  if (!popup) return null;
+  return (
+    <div className="explain-overlay" onClick={onClose}>
+      <div className={`explain-modal explain-modal-${popup.severity || 'medium'}`} onClick={(e) => e.stopPropagation()}>
+        <div className="explain-head">
+          <div>
+            <div className="explain-kicker">Explainable Response</div>
+            <div className="explain-title">{popup.title}</div>
+          </div>
+          <button className="explain-close" onClick={onClose}>CLOSE</button>
+        </div>
+        <div className="explain-summary">{popup.summary}</div>
+        <div className="explain-meta-row">
+          <span className="explain-pill">Target: {popup.target}</span>
+          <span className="explain-pill">Action: {popup.action}</span>
+          <span className="explain-pill">Notification: {popup.notification}</span>
+        </div>
+        <div className="explain-section-title">Why this happened</div>
+        <div className="explain-list">
+          {popup.reasons.map((reason) => (
+            <div key={reason} className="explain-row">{reason}</div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// â”€â”€â”€ constants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const DAYS   = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const PANELS = ['ALERT FEED', 'RISK TIMELINE', 'FRAUD GRAPH', 'AI EXPLANATION', 'LOGIN HEATMAP', 'SIMULATE'];
 
-// ─── helpers ──────────────────────────────────────────────────────────────────
+// â”€â”€â”€ helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const riskColor = (score) => {
   if (score >= 0.9)  return '#ff2d55';
   if (score >= 0.7)  return '#ff6b35';
@@ -37,9 +256,9 @@ const timeAgo = (iso) => {
   return `${Math.floor(diff / 3600)}h ago`;
 };
 
-const fmt = (n, d = 3) => typeof n === 'number' ? n.toFixed(d) : '—';
+const fmt = (n, d = 3) => typeof n === 'number' ? n.toFixed(d) : 'â€”';
 
-// ─── sub-components ───────────────────────────────────────────────────────────
+// â”€â”€â”€ sub-components â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const fmtUpdate = (iso) => iso ? `Updated ${timeAgo(iso)}` : 'Waiting for data';
 const formatSource = (source) => source === 'stored_session_events' ? 'Stored Session Events' : source || 'Generated Live';
@@ -134,7 +353,16 @@ function StatusBar({ online, alertCount, modelInfo }) {
   );
 }
 
-// ── Alert Feed ────────────────────────────────────────────────────────────────
+// â”€â”€ Alert Feed â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function ServiceFlash({ online }) {
+  if (online) return null;
+  return (
+    <div className="service-flash" role="alert" aria-live="assertive">
+      ML SERVICE DOWN: live Python fraud scoring is unavailable. Dashboard activity may be degraded until the service is restored.
+    </div>
+  );
+}
+
 function AlertFeed({ alerts, onSelect, selected }) {
   return (
     <div className="panel-scroll">
@@ -167,7 +395,7 @@ function AlertFeed({ alerts, onSelect, selected }) {
   );
 }
 
-// ── Risk Timeline ─────────────────────────────────────────────────────────────
+// â”€â”€ Risk Timeline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function RiskTimeline({ data }) {
   const totalEvents = data.reduce((s, d) => s + d.events, 0);
   const totalFraud = data.reduce((s, d) => s + d.fraud, 0);
@@ -213,9 +441,19 @@ function RiskTimeline({ data }) {
   );
 }
 
-// ── Fraud Graph ───────────────────────────────────────────────────────────────
+// â”€â”€ Fraud Graph â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function FraudGraph({ nodes, edges, onNodeClick, selected }) {
-  const W = 700, H = 460;
+  const coords = nodes.length ? nodes : [{ x: 0, y: 0 }];
+  const minX = Math.min(...coords.map((n) => n.x));
+  const maxX = Math.max(...coords.map((n) => n.x));
+  const minY = Math.min(...coords.map((n) => n.y));
+  const maxY = Math.max(...coords.map((n) => n.y));
+  const padX = 90;
+  const padY = 80;
+  const viewBoxX = minX - padX;
+  const viewBoxY = minY - padY;
+  const W = Math.max(520, (maxX - minX) + (padX * 2));
+  const H = Math.max(360, (maxY - minY) + (padY * 2));
   const nodeById = Object.fromEntries(nodes.map(n => [n.id, n]));
 
   return (
@@ -228,7 +466,7 @@ function FraudGraph({ nodes, edges, onNodeClick, selected }) {
           Node color = risk level
         </span>
       </div>
-      <svg viewBox={`0 0 ${W} ${H}`} className="graph-svg">
+      <svg viewBox={`${viewBoxX} ${viewBoxY} ${W} ${H}`} className="graph-svg">
         <defs>
           <filter id="glow">
             <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
@@ -241,15 +479,17 @@ function FraudGraph({ nodes, edges, onNodeClick, selected }) {
           return (
             <line key={i}
               x1={from.x} y1={from.y} x2={to.x} y2={to.y}
-              stroke={`rgba(255,255,255,${e.weight * 0.25})`}
+              stroke={graphEdgeColor(e)}
               strokeWidth={e.weight * 2.5}
+              strokeDasharray={e.kind === 'customer_employee' ? '0' : '6 4'}
+              opacity={Math.max(0.4, e.weight)}
             />
           );
         })}
         {nodes.map((n) => {
           const isSelected = selected === n.id;
           const typeColor = n.type === 'device' ? '#bf5af2' : n.type === 'employee' ? '#ffd60a' : '#0a84ff';
-          const r = n.type === 'device' ? 14 : n.type === 'employee' ? 16 : 18;
+          const r = n.type === 'device' ? 18 : n.type === 'employee' ? 20 : 22;
           return (
             <g key={n.id} onClick={() => onNodeClick(n.id)} className="graph-node-g">
               {isSelected && (
@@ -265,8 +505,13 @@ function FraudGraph({ nodes, edges, onNodeClick, selected }) {
               />
               <circle cx={n.x} cy={n.y} r={r * 0.4} fill={typeColor} />
               <text x={n.x} y={n.y + r + 14} textAnchor="middle"
-                fill="#aeaeb2" fontSize="10" fontFamily="'JetBrains Mono', monospace">
+                fill="#e5e5ea" fontSize="13" fontWeight="700" fontFamily="'JetBrains Mono', monospace">
                 {n.id}
+              </text>
+              <text x={n.x} y={n.y - r - 10} textAnchor="middle"
+                fill={n.type === 'employee' ? '#ffd60a' : n.type === 'device' ? '#bf5af2' : '#636366'}
+                fontSize="10" fontWeight="700" fontFamily="'JetBrains Mono', monospace">
+                {n.type === 'employee' ? 'INTERNAL' : n.type === 'device' ? 'EXTERNAL' : n.segment === 'internal' ? 'EMP-LINKED' : 'CUSTOMER'}
               </text>
             </g>
           );
@@ -276,7 +521,7 @@ function FraudGraph({ nodes, edges, onNodeClick, selected }) {
   );
 }
 
-// ── AI Explanation (SHAP) ─────────────────────────────────────────────────────
+// â”€â”€ AI Explanation (SHAP) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function AiExplanation({ alert, modelInfo }) {
   if (!alert) return (
     <div className="empty">Select an alert from the feed to see AI explanation.</div>
@@ -290,7 +535,7 @@ function AiExplanation({ alert, modelInfo }) {
       <div className="shap-header">
         <div>
           <div className="shap-title">Event {alert.event_id}</div>
-          <div className="shap-sub">User {alert.user_id} · {new Date(alert.timestamp).toLocaleString('en-IN')}</div>
+          <div className="shap-sub">User {alert.user_id} Â· {new Date(alert.timestamp).toLocaleString('en-IN')}</div>
         </div>
         <div className="shap-scores">
           <div className="shap-score-box" style={{ borderColor: riskColor(alert.combined_risk_score) }}>
@@ -316,7 +561,7 @@ function AiExplanation({ alert, modelInfo }) {
 
       <div className="shap-action" style={{ background: `${actionColor(alert.security_action?.code)}22`, borderColor: actionColor(alert.security_action?.code) }}>
         <span className="shap-action-code" style={{ color: actionColor(alert.security_action?.code) }}>
-          ⚡ {alert.security_action?.code?.replace(/_/g, ' ')}
+          âš¡ {alert.security_action?.code?.replace(/_/g, ' ')}
         </span>
         <span className="shap-action-desc">{alert.security_action?.description}</span>
       </div>
@@ -358,7 +603,7 @@ function AiExplanation({ alert, modelInfo }) {
   );
 }
 
-// ── Login Heatmap ─────────────────────────────────────────────────────────────
+// â”€â”€ Login Heatmap â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function LoginHeatmap({ data }) {
   const maxCount = Math.max(...data.map(d => d.count), 1);
   return (
@@ -381,7 +626,7 @@ function LoginHeatmap({ data }) {
               : `rgba(10,132,255,${0.1 + intensity * 0.7})`;
             return (
               <div key={h} className="heatmap-cell" style={{ background: bg }}
-                title={`${day} ${h}:00 — ${cell?.count || 0} logins, anomaly: ${fmt(anomaly)}`}>
+                title={`${day} ${h}:00 â€” ${cell?.count || 0} logins, anomaly: ${fmt(anomaly)}`}>
                 {anomaly > 0.6 && <span className="heatmap-alert-dot" />}
               </div>
             );
@@ -389,15 +634,16 @@ function LoginHeatmap({ data }) {
         </div>
       ))}
       <div className="heatmap-legend">
-        <span style={{color:'#0a84ff'}}>■ Normal Activity</span>
-        <span style={{color:'#ff2d55'}}>■ Anomalous Login</span>
+        <span style={{color:'#0a84ff'}}>â–  Normal Activity</span>
+        <span style={{color:'#ff2d55'}}>â–  Anomalous Login</span>
         <span style={{color:'#636366'}}>Darker = Higher Volume</span>
       </div>
     </div>
   );
 }
 
-// ── Attack Simulation ─────────────────────────────────────────────────────────
+// â”€â”€ Attack Simulation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// eslint-disable-next-line no-unused-vars
 function Simulation({ onResult }) {
   const [form, setForm] = useState({
     userId: 'C1013', amount: 322, hour: 10, dayOfWeek: 4, month: 5,
@@ -443,7 +689,7 @@ function Simulation({ onResult }) {
       // fall back to mock
       const mock = MOCK_ALERTS.find(a => a.combined_risk_score > 0.9) || MOCK_ALERTS[0];
       onResult({ ...mock, user_id: form.userId, timestamp: form.timestamp });
-      setError('ML service offline — showing mock result');
+      setError('ML service offline â€” showing mock result');
     } finally {
       setLoading(false);
     }
@@ -453,13 +699,13 @@ function Simulation({ onResult }) {
 
   return (
     <div className="sim-wrap">
-      <div className="sim-title">⚡ Attack Simulation</div>
+      <div className="sim-title">âš¡ Attack Simulation</div>
       <div className="sim-desc">Submit a synthetic transaction to test the fraud detection pipeline end-to-end.</div>
       <div className="sim-grid">
         {[
           ['User ID',          'userId',         'text'],
-          ['Amount (₹)',       'amount',          'number'],
-          ['Hour (0–23)',      'hour',             'number'],
+          ['Amount (â‚¹)',       'amount',          'number'],
+          ['Hour (0â€“23)',      'hour',             'number'],
           ['Day of Week',      'dayOfWeek',        'number'],
           ['Month',            'month',            'number'],
           ['Is Night (0/1)',   'isNight',          'number'],
@@ -485,13 +731,309 @@ function Simulation({ onResult }) {
       </div>
       {error && <div className="sim-error">{error}</div>}
       <button className="sim-btn" onClick={handleSubmit} disabled={loading}>
-        {loading ? 'ANALYSING...' : '▶ RUN FRAUD ANALYSIS'}
+        {loading ? 'ANALYSING...' : 'â–¶ RUN FRAUD ANALYSIS'}
       </button>
     </div>
   );
 }
 
-// ─── Main App ─────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Main App â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function ScenarioSimulation({ onTxnResult, onLoginResult }) {
+  const txnPresets = {
+    clean_allow_customer: {
+      userId: 'C10715', amount: 88, hour: 11, dayOfWeek: 2, month: 4,
+      isWeekend: 0, isNight: 0, amountDiff: -8, timeDiff: 420,
+      amountVelocity: 0.21, rollingAvg: 96, rollingStd: 16,
+      deviation: -8, zScore: -0.5, userTxnCount: 280,
+      deviceId: '', employeeId: '',
+      timestamp: new Date().toISOString().slice(0, 19),
+    },
+    graph_watch_customer: {
+      userId: 'C10033', amount: 92, hour: 11, dayOfWeek: 2, month: 4,
+      isWeekend: 0, isNight: 0, amountDiff: -12, timeDiff: 360,
+      amountVelocity: 0.26, rollingAvg: 104, rollingStd: 18,
+      deviation: -12, zScore: -0.67, userTxnCount: 260,
+      deviceId: '', employeeId: '',
+      timestamp: new Date().toISOString().slice(0, 19),
+    },
+    external_device_ring: {
+      userId: 'C1013', amount: 322, hour: 10, dayOfWeek: 4, month: 5,
+      isWeekend: 0, isNight: 0, amountDiff: -200, timeDiff: 22,
+      amountVelocity: 14.68, rollingAvg: 522, rollingStd: 34.94,
+      deviation: -200, zScore: -5.72, userTxnCount: 140,
+      deviceId: 'D014', employeeId: '',
+      timestamp: new Date().toISOString().slice(0, 19),
+    },
+    internal_employee_abuse: {
+      userId: 'C10014', amount: 348, hour: 23, dayOfWeek: 5, month: 6,
+      isWeekend: 1, isNight: 1, amountDiff: 275, timeDiff: 12,
+      amountVelocity: 29.0, rollingAvg: 73, rollingStd: 41.5,
+      deviation: 275, zScore: 6.62, userTxnCount: 26,
+      deviceId: 'D001', employeeId: 'E049',
+      timestamp: new Date().toISOString().slice(0, 19),
+    },
+  };
+  const loginPresets = {
+    trusted_office_login: {
+      userId: 'C1013', timestamp: new Date().toISOString().slice(0, 19),
+      hour: 10, dayOfWeek: 2, hourDeviation: 0.8, timeDiff: 7,
+      dormantLogin: 0, loginFreq7d: 11, distFromHome: 6, distance: 8,
+      speed: 12, impossibleTravel: 0, vpn: 0, isNewDevice: 0, cityCode: 12, deviceCode: 6,
+    },
+    vpn_new_device: {
+      userId: 'C1013', timestamp: new Date().toISOString().slice(0, 19),
+      hour: 2, dayOfWeek: 6, hourDeviation: 7.2, timeDiff: 0.47,
+      dormantLogin: 0, loginFreq7d: 2, distFromHome: 920, distance: 1180,
+      speed: 640, impossibleTravel: 1, vpn: 1, isNewDevice: 1, cityCode: 31, deviceCode: 18,
+    },
+    impossible_travel: {
+      userId: 'C10005', timestamp: new Date().toISOString().slice(0, 19),
+      hour: 1, dayOfWeek: 0, hourDeviation: 8.4, timeDiff: 0.27,
+      dormantLogin: 1, loginFreq7d: 1, distFromHome: 1450, distance: 1820,
+      speed: 910, impossibleTravel: 1, vpn: 0, isNewDevice: 1, cityCode: 36, deviceCode: 21,
+    },
+    far_from_home: {
+      userId: 'C10037', timestamp: new Date().toISOString().slice(0, 19),
+      hour: 22, dayOfWeek: 4, hourDeviation: 5.1, timeDiff: 1.42,
+      dormantLogin: 0, loginFreq7d: 3, distFromHome: 620, distance: 140,
+      speed: 92, impossibleTravel: 0, vpn: 0, isNewDevice: 1, cityCode: 29, deviceCode: 17,
+    },
+  };
+
+  const [mode, setMode] = useState('transaction');
+  const [txnForm, setTxnForm] = useState(txnPresets.external_device_ring);
+  const [loginForm, setLoginForm] = useState(loginPresets.vpn_new_device);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [txnResult, setTxnResult] = useState(null);
+  const [loginResult, setLoginResult] = useState(null);
+  const currentTxnSignals = transactionSignals(txnForm);
+
+  const derivedTxn = {
+    userId: txnForm.userId,
+    amount: txnForm.amount,
+    logAmount: parseFloat(Math.log(txnForm.amount + 1).toFixed(6)),
+    hour: txnForm.hour,
+    dayOfWeek: txnForm.dayOfWeek,
+    month: txnForm.month,
+    isWeekend: txnForm.isWeekend,
+    isNight: txnForm.isNight,
+    amountDiff: txnForm.amountDiff,
+    timeDiff: txnForm.timeDiff,
+    amountVelocity: txnForm.amountVelocity,
+    rollingAvg: txnForm.rollingAvg,
+    rollingStd: txnForm.rollingStd,
+    deviation: txnForm.deviation,
+    zScore: txnForm.zScore,
+    userTxnCount: txnForm.userTxnCount,
+    timestamp: txnForm.timestamp,
+  };
+
+  const setTxn = (k, v) => setTxnForm((f) => ({ ...f, [k]: v }));
+  const setLogin = (k, v) => setLoginForm((f) => ({ ...f, [k]: v }));
+  const applyTxnPreset = (name) => setTxnForm({ ...txnPresets[name], timestamp: new Date().toISOString().slice(0, 19) });
+  const applyLoginPreset = (name) => setLoginForm({ ...loginPresets[name], timestamp: new Date().toISOString().slice(0, 19) });
+
+  const submitTransaction = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await api.predictEvent({
+        transaction: derivedTxn,
+        deviceId: txnForm.deviceId || null,
+        employeeId: txnForm.employeeId || null,
+      });
+      setTxnResult(result);
+      onTxnResult({ request: txnForm, response: result });
+    } catch {
+      const mock = MOCK_ALERTS.find((a) => a.combined_risk_score > 0.9) || MOCK_ALERTS[0];
+      const fallback = { ...mock, user_id: txnForm.userId, timestamp: txnForm.timestamp };
+      setTxnResult(fallback);
+      onTxnResult({ request: txnForm, response: fallback });
+      setError('ML service offline - showing mock transaction result');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const submitLogin = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await api.predictLogin(loginForm);
+      const payload = { request: loginForm, response: result };
+      setLoginResult(payload);
+      onLoginResult(payload);
+    } catch {
+      const score = Number(loginForm.impossibleTravel || loginForm.vpn || loginForm.isNewDevice) ? 0.84 : 0.18;
+      const payload = {
+        request: loginForm,
+        response: { anomaly_score: score, is_anomaly: score >= 0.6 },
+      };
+      setLoginResult(payload);
+      onLoginResult(payload);
+      setError('ML service offline - showing mock login anomaly result');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const currentLoginSignals = loginSignals(loginForm);
+
+  return (
+    <div className="sim-wrap">
+      <div className="sim-title">Scenario Simulator</div>
+      <div className="sim-desc">Run a manual transaction fraud case or a manual login anomaly case while the background stream keeps the dashboard moving.</div>
+      <div className="sim-mode-tabs">
+        <button className={`sim-mode-tab ${mode === 'transaction' ? 'sim-mode-tab-active' : ''}`} onClick={() => setMode('transaction')}>
+          Transaction Fraud
+        </button>
+        <button className={`sim-mode-tab ${mode === 'login' ? 'sim-mode-tab-active' : ''}`} onClick={() => setMode('login')}>
+          Login Anomaly
+        </button>
+      </div>
+
+      {mode === 'transaction' && (
+        <>
+          <div className="sim-preset-row">
+            <button className="sim-chip" onClick={() => applyTxnPreset('clean_allow_customer')}>Clean allow customer</button>
+            <button className="sim-chip" onClick={() => applyTxnPreset('graph_watch_customer')}>Graph-watch customer</button>
+            <button className="sim-chip" onClick={() => applyTxnPreset('external_device_ring')}>External device ring</button>
+            <button className="sim-chip" onClick={() => applyTxnPreset('internal_employee_abuse')}>Internal employee abuse</button>
+          </div>
+          <div className="sim-desc">Use this for the XGBoost transaction model plus the graph path. The graph score comes from the selected customer user ID, so changing the customer changes the precomputed graph risk profile too.</div>
+          <div className="sim-grid">
+            {[
+              ['User ID', 'userId', 'text'],
+              ['Amount (INR)', 'amount', 'number'],
+              ['Hour (0-23)', 'hour', 'number'],
+              ['Day of Week', 'dayOfWeek', 'number'],
+              ['Month', 'month', 'number'],
+              ['Is Night (0/1)', 'isNight', 'number'],
+              ['Amount Diff', 'amountDiff', 'number'],
+              ['Time Diff (hours)', 'timeDiff', 'number'],
+              ['Velocity', 'amountVelocity', 'number'],
+              ['Rolling Avg', 'rollingAvg', 'number'],
+              ['Rolling Std', 'rollingStd', 'number'],
+              ['Deviation', 'deviation', 'number'],
+              ['Z-Score', 'zScore', 'number'],
+              ['Txn Count', 'userTxnCount', 'number'],
+              ['Device ID', 'deviceId', 'text'],
+              ['Employee ID', 'employeeId', 'text'],
+            ].map(([label, key, type]) => (
+              <div key={key} className="sim-field">
+                <label className="sim-label">{label}</label>
+                <input className="sim-input" type={type}
+                  value={txnForm[key]}
+                  onChange={(e) => setTxn(key, type === 'number' ? parseFloat(e.target.value) || 0 : e.target.value)}
+                />
+              </div>
+            ))}
+          </div>
+          <div className="sim-signal-box">
+            <div className="sim-signal-title">Current Graph / Transaction Signals</div>
+            <div className="sim-signal-list">
+              {(currentTxnSignals.length ? currentTxnSignals : ['Low-friction customer payment path']).map((signal) => (
+                <span key={signal} className="sim-chip sim-chip-ghost">{signal}</span>
+              ))}
+              <span className="sim-chip sim-chip-ghost">Graph profile seeded by customer {txnForm.userId}</span>
+            </div>
+          </div>
+          {txnResult && (
+            <div className="sim-result-card">
+              <div className="sim-result-head">
+                <span>Latest Transaction Result</span>
+                <span style={{ color: riskColor(txnResult.combined_risk_score || 0) }}>{fmt(txnResult.combined_risk_score || 0)}</span>
+              </div>
+              <div className="sim-result-meta">
+                <span>{txnResult.security_action?.code?.replace(/_/g, ' ') || 'No action'}</span>
+                <span>ML {fmt(txnResult.transaction_result?.ml_fraud_score || 0)}</span>
+                <span>Graph {fmt(txnResult.graph_result?.graph_risk_score || 0)}</span>
+                <span>{txnForm.employeeId ? 'Internal employee path' : 'External customer/device path'}</span>
+              </div>
+            </div>
+          )}
+          {error && <div className="sim-error">{error}</div>}
+          <button className="sim-btn" onClick={submitTransaction} disabled={loading}>
+            {loading ? 'ANALYSING...' : 'RUN TRANSACTION FRAUD'}
+          </button>
+        </>
+      )}
+
+      {mode === 'login' && (
+        <>
+          <div className="sim-preset-row">
+            <button className="sim-chip" onClick={() => applyLoginPreset('trusted_office_login')}>Trusted office</button>
+            <button className="sim-chip" onClick={() => applyLoginPreset('vpn_new_device')}>VPN + new device</button>
+            <button className="sim-chip" onClick={() => applyLoginPreset('impossible_travel')}>Impossible travel</button>
+            <button className="sim-chip" onClick={() => applyLoginPreset('far_from_home')}>Far from home</button>
+          </div>
+          <div className="sim-desc">Use this visible login form for the Isolation Forest model so you can show exactly which login inputs create an anomaly.</div>
+          <div className="sim-grid">
+            {[
+              ['User ID', 'userId', 'text'],
+              ['Hour (0-23)', 'hour', 'number'],
+              ['Day of Week', 'dayOfWeek', 'number'],
+              ['Hour Deviation', 'hourDeviation', 'number'],
+              ['Time Diff (hours)', 'timeDiff', 'number'],
+              ['Dormant Login (0/1)', 'dormantLogin', 'number'],
+              ['Login Freq 7d', 'loginFreq7d', 'number'],
+              ['Dist From Home', 'distFromHome', 'number'],
+              ['Distance', 'distance', 'number'],
+              ['Speed', 'speed', 'number'],
+              ['Impossible Travel (0/1)', 'impossibleTravel', 'number'],
+              ['VPN (0/1)', 'vpn', 'number'],
+              ['New Device (0/1)', 'isNewDevice', 'number'],
+              ['City Code', 'cityCode', 'number'],
+              ['Device Code', 'deviceCode', 'number'],
+            ].map(([label, key, type]) => (
+              <div key={key} className="sim-field">
+                <label className="sim-label">{label}</label>
+                <input className="sim-input" type={type}
+                  value={loginForm[key]}
+                  onChange={(e) => setLogin(key, type === 'number' ? parseFloat(e.target.value) || 0 : e.target.value)}
+                />
+              </div>
+            ))}
+          </div>
+          <div className="sim-signal-box">
+            <div className="sim-signal-title">Current Login Signals</div>
+            <div className="sim-signal-list">
+              {(currentLoginSignals.length ? currentLoginSignals : ['No obvious rule-based red flags']).map((signal) => (
+                <span key={signal} className="sim-chip sim-chip-ghost">{signal}</span>
+              ))}
+            </div>
+          </div>
+          {loginResult && (
+            <div className="sim-result-card">
+              <div className="sim-result-head">
+                <span>Latest Login Result</span>
+                <span style={{ color: riskColor(loginResult.response?.anomaly_score || 0) }}>{fmt(loginResult.response?.anomaly_score || 0)}</span>
+              </div>
+              <div className="sim-result-meta">
+                <span>{loginResult.response?.is_anomaly ? 'Anomalous login' : 'Looks normal'}</span>
+                <span>User {loginResult.request?.userId}</span>
+                <span>Device D{String(loginResult.request?.deviceCode ?? 0).padStart(3, '0')}</span>
+                <span>
+                  {loginResult.response?.is_anomaly
+                    ? 'Model flagged anomaly'
+                    : currentLoginSignals.length
+                      ? currentLoginSignals[0]
+                      : 'Model sees low-risk behavior'}
+                </span>
+              </div>
+            </div>
+          )}
+          {error && <div className="sim-error">{error}</div>}
+          <button className="sim-btn" onClick={submitLogin} disabled={loading}>
+            {loading ? 'ANALYSING...' : 'RUN LOGIN ANOMALY'}
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const nowIso = () => new Date().toISOString();
   const [panel,      setPanel]      = useState(0);
@@ -504,9 +1046,11 @@ export default function App() {
   const [modelInfo,  setModelInfo]  = useState(MOCK_MODEL_INFO);
   const [graphNodes, setGraphNodes] = useState(MOCK_GRAPH_NODES);
   const [graphEdges, setGraphEdges] = useState(MOCK_GRAPH_EDGES);
+  const [graphMeta, setGraphMeta] = useState({ segments: null, generated_from: null });
   const [timelineData, setTimelineData] = useState(buildTimeline(MOCK_ALERTS));
   const [heatmapData, setHeatmapData] = useState(buildHeatmap([]));
   const [dataSource, setDataSource] = useState('Generated Live');
+  const [explanationPopup, setExplanationPopup] = useState(null);
   const tickRef = useRef(null);
   const loginTickRef = useRef(null);
   const [panelUpdated, setPanelUpdated] = useState({
@@ -526,6 +1070,10 @@ export default function App() {
       return next;
     });
   }, []);
+
+  useEffect(() => {
+    alertsRef.current = alerts;
+  }, [alerts]);
 
   const refreshDashboardSnapshot = useCallback(async () => {
     const snapshot = await api.dashboardSnapshot();
@@ -553,12 +1101,12 @@ export default function App() {
     if (Array.isArray(snapshot?.graph?.edges)) {
       setGraphEdges(snapshot.graph.edges);
     }
+    setGraphMeta({
+      segments: snapshot?.graph?.segments || null,
+      generated_from: snapshot?.graph?.generated_from || null,
+    });
     touchPanels(['alerts', 'detail', 'timeline', 'graph', 'heatmap']);
   }, [touchPanels]);
-
-  useEffect(() => {
-    alertsRef.current = alerts;
-  }, [alerts]);
 
   // Check ML service health
   const checkHealth = useCallback(async () => {
@@ -648,7 +1196,7 @@ export default function App() {
     return () => clearInterval(loginTickRef.current);
   }, [refreshDashboardSnapshot, touchPanels]);
 
-  // Live ticker — calls real ML model every 20s with randomised realistic features
+  // Live ticker â€” calls real ML model every 20s with randomised realistic features
   useEffect(() => {
     const USERS = ['C1013', 'C10005', 'C10014', 'C10019', 'C10033', 'C10037', 'C10191'];
     const DEVICES = ['D001', 'D002', 'D006', 'D010', 'D014', 'D021'];
@@ -723,14 +1271,14 @@ export default function App() {
       const txn = randomTxn();
       const { deviceId, employeeId, ...transaction } = txn;
       try {
-        // Call real Spring Boot → Python ML pipeline
+        // Call real Spring Boot â†’ Python ML pipeline
         const result = await api.predictEvent({ transaction, deviceId, employeeId });
         setAlerts(prev => [result, ...prev].slice(0, 50));
         setSelected(result);
         touchPanels(['alerts', 'detail', 'timeline', 'ai']);
         await refreshDashboardSnapshot();
       } catch {
-        // ML offline — generate a locally consistent mock alert
+        // ML offline â€” generate a locally consistent mock alert
         const mlScore    = parseFloat((Math.random() * 0.9 + 0.05).toFixed(3));
         const graphScore = parseFloat((Math.random() * 0.6 + 0.2).toFixed(3));
         const combined   = parseFloat((0.65 * mlScore + 0.35 * graphScore).toFixed(3));
@@ -765,24 +1313,41 @@ export default function App() {
     return () => clearInterval(tickRef.current);
   }, [refreshDashboardSnapshot, touchPanels]);
 
-  const handleSimResult = (result) => {
-    setAlerts(prev => [result, ...prev]);
+  const handleTxnSimResult = ({ request, response }) => {
+    setAlerts(prev => [response, ...prev]);
     touchPanels(['alerts', 'detail', 'timeline', 'ai', 'simulate']);
-    setSelected(result);
-    setGraphNode(result?.user_id || null);
+    setSelected(response);
+    const isLowRisk = Number(response?.combined_risk_score || 0) < 0.4;
+    setGraphNode(isLowRisk ? null : response?.user_id || null);
+    setExplanationPopup(buildTransactionExplanation({ request, response }));
     refreshDashboardSnapshot().catch(() => {});
-    setPanel(2);
+    setPanel(isLowRisk ? 0 : 2);
+  };
+
+  const handleLoginSimResult = ({ request, response }) => {
+    const event = {
+      ...request,
+      anomaly_score: Number(response?.anomaly_score || 0),
+      is_anomaly: Boolean(response?.is_anomaly),
+    };
+    loginEventsRef.current = [event, ...loginEventsRef.current].slice(0, 300);
+    setHeatmapData(buildHeatmap(loginEventsRef.current));
+    touchPanels(['heatmap', 'graph', 'simulate']);
+    setGraphNode(Number(response?.anomaly_score || 0) < 0.4 ? null : request?.userId || null);
+    setExplanationPopup(buildLoginExplanation({ request, response }));
+    refreshDashboardSnapshot().catch(() => {});
   };
 
   const socAlerts = alerts.filter(a => a.alert_soc);
 
   return (
     <div className="app">
+      <ExplanationPopup popup={explanationPopup} onClose={() => setExplanationPopup(null)} />
       {/* Header */}
       <header className="header">
         <div className="header-left">
           <div className="logo">
-            <span className="logo-icon">⬡</span>
+            <span className="logo-icon">â¬¡</span>
             <div>
               <div className="logo-title">SENTINEL</div>
               <div className="logo-sub">AI Banking Security Operations Center</div>
@@ -792,7 +1357,7 @@ export default function App() {
         <div className="header-right">
           {socAlerts.length > 0 && (
             <div className="soc-alert-badge">
-              🔴 {socAlerts.length} SOC ALERT{socAlerts.length > 1 ? 'S' : ''}
+              ðŸ”´ {socAlerts.length} SOC ALERT{socAlerts.length > 1 ? 'S' : ''}
             </div>
           )}
         </div>
@@ -800,6 +1365,7 @@ export default function App() {
 
       {/* Status bar */}
       <StatusBar online={online} alertCount={alerts.filter(a => a.security_action?.severity !== 'low').length} modelInfo={modelInfo} />
+      <ServiceFlash online={online} />
 
       {/* Nav tabs */}
       <nav className="nav">
@@ -842,7 +1408,7 @@ export default function App() {
           {panel === 1 && (
             <div className="panel-full">
               <div className="panel-header">
-                <span className="panel-title">RISK TIMELINE — 24H</span>
+                <span className="panel-title">RISK TIMELINE â€” 24H</span>
               </div>
               <span className="panel-sub">{dataSource}</span>
               <span className="panel-sub">{fmtUpdate(panelUpdated.timeline)}</span>
@@ -851,29 +1417,82 @@ export default function App() {
           )}
 
           {panel === 2 && (
-            <div className="panel-full">
+            <div className="panel-full panel-full-scroll">
               <div className="panel-header">
                 <span className="panel-title">FRAUD NETWORK GRAPH</span>
                 <span className="panel-sub">{fmtUpdate(panelUpdated.graph)}</span>
                 <span className="panel-sub">{dataSource}</span>
                 {graphNode && <span className="panel-sub">Selected: {graphNode}</span>}
               </div>
+              <div className="graph-summary">
+                <div className="graph-summary-card">
+                  <span className="graph-summary-label">Internal Employee Links</span>
+                  <span className="graph-summary-value" style={{ color: '#ffd60a' }}>
+                    {graphMeta.segments?.internal_employee_links ?? 0}
+                  </span>
+                </div>
+                <div className="graph-summary-card">
+                  <span className="graph-summary-label">External Device Links</span>
+                  <span className="graph-summary-value" style={{ color: '#bf5af2' }}>
+                    {graphMeta.segments?.external_device_links ?? 0}
+                  </span>
+                </div>
+                <div className="graph-summary-card">
+                  <span className="graph-summary-label">Graph Nodes Rendered</span>
+                  <span className="graph-summary-value">{graphNodes.length}</span>
+                </div>
+                <div className="graph-summary-card">
+                  <span className="graph-summary-label">Graph Events Used</span>
+                  <span className="graph-summary-value">
+                    {(graphMeta.generated_from?.alerts ?? 0) + (graphMeta.generated_from?.logins ?? 0)}
+                  </span>
+                </div>
+              </div>
               <FraudGraph
                 nodes={graphNodes} edges={graphEdges}
                 onNodeClick={setGraphNode} selected={graphNode}
               />
-              {graphNode && (
-                <div className="graph-detail">
-                  <span className="gd-label">NODE</span> {graphNode}
-                  <span className="gd-risk" style={{ color: riskColor(graphNodes.find(n => n.id === graphNode)?.risk || 0) }}>
-                    RISK {fmt(graphNodes.find(n => n.id === graphNode)?.risk || 0)}
-                    {' '}· {riskLabel(graphNodes.find(n => n.id === graphNode)?.risk || 0)}
-                  </span>
-                </div>
-              )}
+              {graphNode && (() => {
+                const activeNode = graphNodes.find((n) => n.id === graphNode);
+                const connectedEdges = sortGraphEdges(
+                  graphEdges.filter((edge) => edge.from === graphNode || edge.to === graphNode)
+                );
+                const topEdge = connectedEdges[0] || null;
+                return (
+                  <>
+                    <div className="graph-detail">
+                      <span className="gd-label">NODE</span> {graphNode}
+                      <span className="gd-meta">{graphNodeLabel(activeNode)}</span>
+                      <span className="gd-risk" style={{ color: riskColor(activeNode?.risk || 0) }}>
+                        RISK {fmt(activeNode?.risk || 0)} · {riskLabel(activeNode?.risk || 0)}
+                      </span>
+                    </div>
+                    <div className="graph-detail graph-detail-secondary">
+                      <span className="gd-label">PATH</span>
+                      <span className="gd-badge">{graphSegmentLabel(activeNode, topEdge)}</span>
+                      <span className="gd-meta">{connectedEdges.length} active links</span>
+                    </div>
+                    <div className="graph-detail graph-detail-secondary">
+                      <span className="gd-label">PRIMARY</span>
+                      <span className="gd-primary">{primaryGraphReason(activeNode, connectedEdges)}</span>
+                    </div>
+                    <div className="graph-rel-list">
+                      {connectedEdges.length === 0 && <div className="empty">No active relationships for this node yet.</div>}
+                      {connectedEdges.slice(0, 4).map((edge, index) => (
+                        <div key={`${edge.from}-${edge.to}-${index}`} className="graph-rel-row">
+                          <span className="graph-rel-path">{edge.from} → {edge.to}</span>
+                          <span className="graph-rel-kind">{graphRelationLabel(edge)}</span>
+                          <span className="graph-rel-score" style={{ color: riskColor(edge.weight || 0) }}>
+                            {graphPriorityLabel(edge, index)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           )}
-
           {panel === 3 && (
             <div className="panel-full">
               <div className="panel-header">
@@ -901,7 +1520,7 @@ export default function App() {
                 <span className="panel-title">ATTACK SIMULATION</span>
                 <span className="panel-sub">{fmtUpdate(panelUpdated.simulate)}</span>
               </div>
-              <Simulation onResult={handleSimResult} />
+              <ScenarioSimulation onTxnResult={handleTxnSimResult} onLoginResult={handleLoginSimResult} />
             </div>
           )}
         </div>
@@ -909,3 +1528,7 @@ export default function App() {
     </div>
   );
 }
+
+
+
+

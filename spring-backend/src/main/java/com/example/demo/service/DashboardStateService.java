@@ -1,26 +1,43 @@
 package com.example.demo.service;
 
+import com.example.demo.entity.AlertRecord;
+import com.example.demo.entity.LoginRecord;
 import com.example.demo.model.FraudEventRequest;
 import com.example.demo.model.FraudResponse;
 import com.example.demo.model.LoginRequest;
+import com.example.demo.repository.AlertRecordRepository;
+import com.example.demo.repository.LoginRecordRepository;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
 import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.*;
-import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.stream.Collectors;
 
 @Service
 public class DashboardStateService {
 
-    private static final int MAX_ALERTS = 200;
-    private static final int MAX_LOGINS = 500;
+    private static final int SNAPSHOT_ALERT_LIMIT = 2000;
+    private static final int SNAPSHOT_LOGIN_LIMIT = 5000;
     private static final ZoneId ZONE = ZoneId.systemDefault();
 
-    private final Deque<StoredAlertEvent> alertStore = new ConcurrentLinkedDeque<>();
-    private final Deque<StoredLoginEvent> loginStore = new ConcurrentLinkedDeque<>();
+    private final AlertRecordRepository alertRepository;
+    private final LoginRecordRepository loginRepository;
+    private final ObjectMapper objectMapper;
+
+    public DashboardStateService(
+            AlertRecordRepository alertRepository,
+            LoginRecordRepository loginRepository,
+            ObjectMapper objectMapper
+    ) {
+        this.alertRepository = alertRepository;
+        this.loginRepository = loginRepository;
+        this.objectMapper = objectMapper;
+    }
 
     public void storeAlert(FraudEventRequest request, FraudResponse response) {
         if (response == null) {
@@ -29,53 +46,100 @@ public class DashboardStateService {
         if (response.getTimestamp() == null || response.getTimestamp().isBlank()) {
             response.setTimestamp(Instant.now().toString());
         }
+
         String deviceId = request != null ? request.getDeviceId() : null;
         if ((deviceId == null || deviceId.isBlank()) && request != null && request.getLogin() != null && request.getLogin().getDeviceCode() != null) {
             deviceId = "D" + String.format("%03d", request.getLogin().getDeviceCode());
         }
-        alertStore.addFirst(new StoredAlertEvent(
-                response,
-                deviceId,
-                request != null ? request.getEmployeeId() : null
-        ));
-        trim(alertStore, MAX_ALERTS);
+
+        AlertRecord record = new AlertRecord();
+        record.setOccurredAt(parseTimestamp(response.getTimestamp()));
+        record.setEventId(response.getEventId());
+        record.setUserId(response.getUserId());
+        record.setDeviceId(deviceId);
+        record.setEmployeeId(request != null ? request.getEmployeeId() : null);
+        record.setCombinedRiskScore(response.getCombinedRiskScore());
+        record.setGraphRiskScore(response.getGraphRiskScore());
+        record.setAlertSoc(Boolean.TRUE.equals(response.getAlertSoc()));
+        record.setResponseJson(writeResponseJson(response));
+        alertRepository.save(record);
     }
 
     public void storeLogin(LoginRequest request, Map<String, Object> result) {
         if (request == null) {
             return;
         }
-        StoredLoginEvent event = new StoredLoginEvent(
-                request.getUserId(),
-                parseTimestamp(request.getTimestamp()),
-                request.getDeviceCode() != null ? "D" + String.format("%03d", request.getDeviceCode()) : "D000",
-                request.getDeviceCode(),
-                numberValue(result != null ? result.get("anomaly_score") : null),
-                booleanValue(result != null ? result.get("is_anomaly") : null)
-        );
-        loginStore.addFirst(event);
-        trim(loginStore, MAX_LOGINS);
+
+        LoginRecord record = new LoginRecord();
+        record.setOccurredAt(parseTimestamp(request.getTimestamp()));
+        record.setUserId(request.getUserId());
+        record.setDeviceId(request.getDeviceCode() != null ? "D" + String.format("%03d", request.getDeviceCode()) : "D000");
+        record.setDeviceCode(request.getDeviceCode());
+        record.setAnomalyScore(numberValue(result != null ? result.get("anomaly_score") : null));
+        record.setIsAnomaly(booleanValue(result != null ? result.get("is_anomaly") : null));
+        loginRepository.save(record);
     }
 
     public Map<String, Object> buildSnapshot() {
-        List<StoredAlertEvent> alertEvents = new ArrayList<>(alertStore);
-        List<StoredLoginEvent> logins = new ArrayList<>(loginStore);
-        List<FraudResponse> alerts = alertEvents.stream().map(event -> event.response).collect(Collectors.toList());
+        List<StoredAlertEvent> alertEvents = alertRepository
+                .findAllByOrderByOccurredAtDescIdDesc(PageRequest.of(0, SNAPSHOT_ALERT_LIMIT))
+                .stream()
+                .map(this::toStoredAlertEvent)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toList());
 
+        List<StoredLoginEvent> logins = loginRepository
+                .findAllByOrderByOccurredAtDescIdDesc(PageRequest.of(0, SNAPSHOT_LOGIN_LIMIT))
+                .stream()
+                .map(this::toStoredLoginEvent)
+                .collect(Collectors.toList());
+
+        List<FraudResponse> alerts = alertEvents.stream().map(event -> event.response).collect(Collectors.toList());
         Map<String, Object> graph = buildGraph(alertEvents, logins);
 
         return new LinkedHashMap<>() {{
-            put("source", "stored_session_events");
+            put("source", "mysql_persistent_store");
             put("generated_at", Instant.now().toString());
             put("summary", Map.of(
-                    "alerts_stored", alertEvents.size(),
-                    "logins_stored", logins.size()
+                    "alerts_stored", alertRepository.count(),
+                    "logins_stored", loginRepository.count()
             ));
             put("alerts", alerts.stream().limit(50).collect(Collectors.toList()));
             put("timeline", buildTimeline(alerts));
             put("heatmap", buildHeatmap(logins));
             put("graph", graph);
         }};
+    }
+
+    private StoredAlertEvent toStoredAlertEvent(AlertRecord record) {
+        try {
+            FraudResponse response = objectMapper.readValue(record.getResponseJson(), FraudResponse.class);
+            if (response.getTimestamp() == null || response.getTimestamp().isBlank()) {
+                response.setTimestamp(record.getOccurredAt().toString());
+            }
+            return new StoredAlertEvent(response, record.getDeviceId(), record.getEmployeeId());
+        } catch (JsonProcessingException ignored) {
+            return null;
+        }
+    }
+
+    private StoredLoginEvent toStoredLoginEvent(LoginRecord record) {
+        return new StoredLoginEvent(
+                record.getUserId(),
+                record.getOccurredAt(),
+                record.getDeviceId(),
+                record.getDeviceCode(),
+                numberValue(record.getAnomalyScore()),
+                Boolean.TRUE.equals(record.getIsAnomaly())
+        );
+    }
+
+    private String writeResponseJson(FraudResponse response) {
+        try {
+            return objectMapper.writeValueAsString(response);
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("Failed to persist fraud response JSON", ex);
+        }
     }
 
     private List<Map<String, Object>> buildTimeline(List<FraudResponse> alerts) {
@@ -125,7 +189,7 @@ public class DashboardStateService {
             }
         }
 
-        return new ArrayList<>(cells.values()).stream().map(HeatmapCell::toMap).collect(Collectors.toList());
+        return cells.values().stream().map(HeatmapCell::toMap).collect(Collectors.toList());
     }
 
     private Map<String, Object> buildGraph(List<StoredAlertEvent> alertEvents, List<StoredLoginEvent> logins) {
@@ -133,6 +197,8 @@ public class DashboardStateService {
         Map<String, DeviceNode> devices = new LinkedHashMap<>();
         Map<String, EmployeeNode> employees = new LinkedHashMap<>();
         Map<String, EdgeAgg> edges = new LinkedHashMap<>();
+        int internalLinks = 0;
+        int externalLinks = 0;
 
         for (StoredAlertEvent event : alertEvents) {
             FraudResponse alert = event.response;
@@ -151,8 +217,12 @@ public class DashboardStateService {
                         key -> new EdgeAgg(alert.getUserId(), event.deviceId));
                 edge.count++;
                 edge.risk = Math.max(edge.risk, numberValue(alert.getCombinedRiskScore()));
+                edge.kind = "customer_device";
+                edge.label = "Customer activity reused a risky device";
+                externalLinks++;
             }
             if (event.employeeId != null && !event.employeeId.isBlank()) {
+                node.employeeLinked = true;
                 EmployeeNode employee = employees.computeIfAbsent(event.employeeId, EmployeeNode::new);
                 employee.risk = Math.max(employee.risk, numberValue(alert.getCombinedRiskScore()));
                 employee.count++;
@@ -160,6 +230,9 @@ public class DashboardStateService {
                         key -> new EdgeAgg(alert.getUserId(), event.employeeId));
                 edge.count++;
                 edge.risk = Math.max(edge.risk, numberValue(alert.getCombinedRiskScore()));
+                edge.kind = "customer_employee";
+                edge.label = "Employee account interacted with this customer";
+                internalLinks++;
             }
         }
 
@@ -172,15 +245,17 @@ public class DashboardStateService {
             customer.loginCount++;
             customer.lastSeen = customer.lastSeen == null || login.timestamp.isAfter(customer.lastSeen) ? login.timestamp : customer.lastSeen;
 
-            String deviceId = login.deviceId;
-            DeviceNode device = devices.computeIfAbsent(deviceId, id -> new DeviceNode(id, "device"));
+            DeviceNode device = devices.computeIfAbsent(login.deviceId, id -> new DeviceNode(id, "device"));
             device.risk = Math.max(device.risk, login.anomalyScore);
             device.count++;
 
-            String edgeKey = login.userId + "->" + deviceId;
-            EdgeAgg edge = edges.computeIfAbsent(edgeKey, key -> new EdgeAgg(login.userId, deviceId));
+            String edgeKey = login.userId + "->" + login.deviceId;
+            EdgeAgg edge = edges.computeIfAbsent(edgeKey, key -> new EdgeAgg(login.userId, login.deviceId));
             edge.count++;
             edge.risk = Math.max(edge.risk, login.anomalyScore);
+            edge.kind = "login_device";
+            edge.label = "Customer login originated from this device";
+            externalLinks++;
         }
 
         List<CustomerNode> topCustomers = customers.values().stream()
@@ -266,6 +341,10 @@ public class DashboardStateService {
             nodeMaps.add(Map.of(
                     "id", node.id,
                     "type", "customer",
+                    "segment", node.employeeLinked ? "internal" : "external",
+                    "label", node.employeeLinked ? "Customer in employee-linked path" : "Customer in device-linked path",
+                    "eventCount", node.eventCount,
+                    "loginCount", node.loginCount,
                     "risk", round(node.risk),
                     "x", (int) Math.round(190 + 120 * Math.cos(angle)),
                     "y", (int) Math.round(230 + 150 * Math.sin(angle))
@@ -284,6 +363,9 @@ public class DashboardStateService {
             nodeMaps.add(Map.of(
                     "id", id,
                     "type", type,
+                    "segment", employeeNode != null ? "internal" : "external",
+                    "label", employeeNode != null ? "Employee account / operator" : "Shared or risky device",
+                    "count", employeeNode != null ? employeeNode.count : deviceNode != null ? deviceNode.count : 0,
                     "risk", round(risk),
                     "x", (int) Math.round(510 + 95 * Math.cos(angle)),
                     "y", (int) Math.round(230 + 125 * Math.sin(angle))
@@ -316,6 +398,10 @@ public class DashboardStateService {
         return Map.of(
                 "nodes", nodeMaps,
                 "edges", edgeMaps,
+                "segments", Map.of(
+                        "internal_employee_links", internalLinks,
+                        "external_device_links", externalLinks
+                ),
                 "generated_from", Map.of(
                         "alerts", alertEvents.size(),
                         "logins", logins.size()
@@ -377,15 +463,11 @@ public class DashboardStateService {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("from", edge.from);
         map.put("to", edge.to);
+        map.put("kind", edge.kind);
+        map.put("label", edge.label);
         map.put("weight", round(Math.min(1.0, 0.25 + edge.count * 0.12 + edge.risk * 0.45)));
         map.put("count", edge.count);
         return map;
-    }
-
-    private <T> void trim(Deque<T> deque, int maxSize) {
-        while (deque.size() > maxSize) {
-            deque.removeLast();
-        }
     }
 
     private static final class StoredLoginEvent {
@@ -469,6 +551,7 @@ public class DashboardStateService {
         private int eventCount;
         private int loginCount;
         private Instant lastSeen;
+        private boolean employeeLinked;
 
         private CustomerNode(String id) {
             this.id = id;
@@ -518,6 +601,8 @@ public class DashboardStateService {
         private final String to;
         private int count;
         private double risk;
+        private String kind = "relationship";
+        private String label = "Observed activity link";
 
         private EdgeAgg(String from, String to) {
             this.from = from;
