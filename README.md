@@ -1,6 +1,6 @@
-# Sentinel Fraud Project
+# SafeNet Fraud Project
 
-Sentinel is a three-service fraud detection demo:
+SafeNet is a three-service fraud detection demo:
 
 - `frontend/`: React SOC dashboard and manual simulators
 - `spring-backend/`: Spring Boot gateway, validation layer, and session-state store

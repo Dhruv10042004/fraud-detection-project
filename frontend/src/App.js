@@ -256,7 +256,7 @@ const timeAgo = (iso) => {
   return `${Math.floor(diff / 3600)}h ago`;
 };
 
-const fmt = (n, d = 3) => typeof n === 'number' ? n.toFixed(d) : 'â€”';
+const fmt = (n, d = 3) => typeof n === 'number' ? n.toFixed(d) : '-';
 
 // â”€â”€â”€ sub-components â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -535,7 +535,7 @@ function AiExplanation({ alert, modelInfo }) {
       <div className="shap-header">
         <div>
           <div className="shap-title">Event {alert.event_id}</div>
-          <div className="shap-sub">User {alert.user_id} Â· {new Date(alert.timestamp).toLocaleString('en-IN')}</div>
+          <div className="shap-sub">User {alert.user_id} | {new Date(alert.timestamp).toLocaleString('en-IN')}</div>
         </div>
         <div className="shap-scores">
           <div className="shap-score-box" style={{ borderColor: riskColor(alert.combined_risk_score) }}>
@@ -561,7 +561,7 @@ function AiExplanation({ alert, modelInfo }) {
 
       <div className="shap-action" style={{ background: `${actionColor(alert.security_action?.code)}22`, borderColor: actionColor(alert.security_action?.code) }}>
         <span className="shap-action-code" style={{ color: actionColor(alert.security_action?.code) }}>
-          âš¡ {alert.security_action?.code?.replace(/_/g, ' ')}
+          ACTION: {alert.security_action?.code?.replace(/_/g, ' ')}
         </span>
         <span className="shap-action-desc">{alert.security_action?.description}</span>
       </div>
@@ -626,7 +626,7 @@ function LoginHeatmap({ data }) {
               : `rgba(10,132,255,${0.1 + intensity * 0.7})`;
             return (
               <div key={h} className="heatmap-cell" style={{ background: bg }}
-                title={`${day} ${h}:00 â€” ${cell?.count || 0} logins, anomaly: ${fmt(anomaly)}`}>
+                title={`${day} ${h}:00 - ${cell?.count || 0} logins, anomaly: ${fmt(anomaly)}`}>
                 {anomaly > 0.6 && <span className="heatmap-alert-dot" />}
               </div>
             );
@@ -634,8 +634,8 @@ function LoginHeatmap({ data }) {
         </div>
       ))}
       <div className="heatmap-legend">
-        <span style={{color:'#0a84ff'}}>â–  Normal Activity</span>
-        <span style={{color:'#ff2d55'}}>â–  Anomalous Login</span>
+        <span style={{color:'#0a84ff'}}>Normal Activity</span>
+        <span style={{color:'#ff2d55'}}>Anomalous Login</span>
         <span style={{color:'#636366'}}>Darker = Higher Volume</span>
       </div>
     </div>
@@ -651,7 +651,7 @@ function Simulation({ onResult }) {
     amountVelocity: 14.68, rollingAvg: 522, rollingStd: 34.94,
     deviation: -200, zScore: -5.72, userTxnCount: 140,
     deviceId: 'D014', employeeId: 'E039',
-    timestamp: new Date().toISOString().slice(0, 19),
+    timestamp: new Date().toISOString(),
   });
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState(null);
@@ -689,7 +689,7 @@ function Simulation({ onResult }) {
       // fall back to mock
       const mock = MOCK_ALERTS.find(a => a.combined_risk_score > 0.9) || MOCK_ALERTS[0];
       onResult({ ...mock, user_id: form.userId, timestamp: form.timestamp });
-      setError('ML service offline â€” showing mock result');
+      setError('ML service offline - showing mock result');
     } finally {
       setLoading(false);
     }
@@ -699,13 +699,13 @@ function Simulation({ onResult }) {
 
   return (
     <div className="sim-wrap">
-      <div className="sim-title">âš¡ Attack Simulation</div>
+      <div className="sim-title">Attack Simulation</div>
       <div className="sim-desc">Submit a synthetic transaction to test the fraud detection pipeline end-to-end.</div>
       <div className="sim-grid">
         {[
           ['User ID',          'userId',         'text'],
-          ['Amount (â‚¹)',       'amount',          'number'],
-          ['Hour (0â€“23)',      'hour',             'number'],
+          ['Amount (INR)',      'amount',           'number'],
+          ['Hour (0-23)',       'hour',             'number'],
           ['Day of Week',      'dayOfWeek',        'number'],
           ['Month',            'month',            'number'],
           ['Is Night (0/1)',   'isNight',          'number'],
@@ -731,7 +731,7 @@ function Simulation({ onResult }) {
       </div>
       {error && <div className="sim-error">{error}</div>}
       <button className="sim-btn" onClick={handleSubmit} disabled={loading}>
-        {loading ? 'ANALYSING...' : 'â–¶ RUN FRAUD ANALYSIS'}
+        {loading ? 'ANALYSING...' : 'RUN FRAUD ANALYSIS'}
       </button>
     </div>
   );
@@ -746,7 +746,7 @@ function ScenarioSimulation({ onTxnResult, onLoginResult }) {
       amountVelocity: 0.21, rollingAvg: 96, rollingStd: 16,
       deviation: -8, zScore: -0.5, userTxnCount: 280,
       deviceId: '', employeeId: '',
-      timestamp: new Date().toISOString().slice(0, 19),
+      timestamp: new Date().toISOString(),
     },
     graph_watch_customer: {
       userId: 'C10033', amount: 92, hour: 11, dayOfWeek: 2, month: 4,
@@ -754,7 +754,7 @@ function ScenarioSimulation({ onTxnResult, onLoginResult }) {
       amountVelocity: 0.26, rollingAvg: 104, rollingStd: 18,
       deviation: -12, zScore: -0.67, userTxnCount: 260,
       deviceId: '', employeeId: '',
-      timestamp: new Date().toISOString().slice(0, 19),
+      timestamp: new Date().toISOString(),
     },
     external_device_ring: {
       userId: 'C1013', amount: 322, hour: 10, dayOfWeek: 4, month: 5,
@@ -762,7 +762,7 @@ function ScenarioSimulation({ onTxnResult, onLoginResult }) {
       amountVelocity: 14.68, rollingAvg: 522, rollingStd: 34.94,
       deviation: -200, zScore: -5.72, userTxnCount: 140,
       deviceId: 'D014', employeeId: '',
-      timestamp: new Date().toISOString().slice(0, 19),
+      timestamp: new Date().toISOString(),
     },
     internal_employee_abuse: {
       userId: 'C10014', amount: 348, hour: 23, dayOfWeek: 5, month: 6,
@@ -770,30 +770,30 @@ function ScenarioSimulation({ onTxnResult, onLoginResult }) {
       amountVelocity: 29.0, rollingAvg: 73, rollingStd: 41.5,
       deviation: 275, zScore: 6.62, userTxnCount: 26,
       deviceId: 'D001', employeeId: 'E049',
-      timestamp: new Date().toISOString().slice(0, 19),
+      timestamp: new Date().toISOString(),
     },
   };
   const loginPresets = {
     trusted_office_login: {
-      userId: 'C1013', timestamp: new Date().toISOString().slice(0, 19),
+      userId: 'C1013', timestamp: new Date().toISOString(),
       hour: 10, dayOfWeek: 2, hourDeviation: 0.8, timeDiff: 7,
       dormantLogin: 0, loginFreq7d: 11, distFromHome: 6, distance: 8,
       speed: 12, impossibleTravel: 0, vpn: 0, isNewDevice: 0, cityCode: 12, deviceCode: 6,
     },
     vpn_new_device: {
-      userId: 'C1013', timestamp: new Date().toISOString().slice(0, 19),
+      userId: 'C1013', timestamp: new Date().toISOString(),
       hour: 2, dayOfWeek: 6, hourDeviation: 7.2, timeDiff: 0.47,
       dormantLogin: 0, loginFreq7d: 2, distFromHome: 920, distance: 1180,
       speed: 640, impossibleTravel: 1, vpn: 1, isNewDevice: 1, cityCode: 31, deviceCode: 18,
     },
     impossible_travel: {
-      userId: 'C10005', timestamp: new Date().toISOString().slice(0, 19),
+      userId: 'C10005', timestamp: new Date().toISOString(),
       hour: 1, dayOfWeek: 0, hourDeviation: 8.4, timeDiff: 0.27,
       dormantLogin: 1, loginFreq7d: 1, distFromHome: 1450, distance: 1820,
       speed: 910, impossibleTravel: 1, vpn: 0, isNewDevice: 1, cityCode: 36, deviceCode: 21,
     },
     far_from_home: {
-      userId: 'C10037', timestamp: new Date().toISOString().slice(0, 19),
+      userId: 'C10037', timestamp: new Date().toISOString(),
       hour: 22, dayOfWeek: 4, hourDeviation: 5.1, timeDiff: 1.42,
       dormantLogin: 0, loginFreq7d: 3, distFromHome: 620, distance: 140,
       speed: 92, impossibleTravel: 0, vpn: 0, isNewDevice: 1, cityCode: 29, deviceCode: 17,
@@ -831,8 +831,8 @@ function ScenarioSimulation({ onTxnResult, onLoginResult }) {
 
   const setTxn = (k, v) => setTxnForm((f) => ({ ...f, [k]: v }));
   const setLogin = (k, v) => setLoginForm((f) => ({ ...f, [k]: v }));
-  const applyTxnPreset = (name) => setTxnForm({ ...txnPresets[name], timestamp: new Date().toISOString().slice(0, 19) });
-  const applyLoginPreset = (name) => setLoginForm({ ...loginPresets[name], timestamp: new Date().toISOString().slice(0, 19) });
+  const applyTxnPreset = (name) => setTxnForm({ ...txnPresets[name], timestamp: new Date().toISOString() });
+  const applyLoginPreset = (name) => setLoginForm({ ...loginPresets[name], timestamp: new Date().toISOString() });
 
   const submitTransaction = async () => {
     setLoading(true);
@@ -1036,6 +1036,10 @@ function ScenarioSimulation({ onTxnResult, onLoginResult }) {
 
 export default function App() {
   const nowIso = () => new Date().toISOString();
+  const [theme, setTheme] = useState(() => {
+    if (typeof window === 'undefined') return 'light';
+    return window.localStorage.getItem('safenet-theme') || 'light';
+  });
   const [panel,      setPanel]      = useState(0);
   const [alerts,     setAlerts]     = useState(MOCK_ALERTS);
   const alertsRef = useRef(MOCK_ALERTS);
@@ -1070,6 +1074,11 @@ export default function App() {
       return next;
     });
   }, []);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    window.localStorage.setItem('safenet-theme', theme);
+  }, [theme]);
 
   useEffect(() => {
     alertsRef.current = alerts;
@@ -1142,7 +1151,7 @@ export default function App() {
       const suspicious = Math.random() < 0.35;
       const timestamp = new Date(
         Date.now() - Math.floor(Math.random() * 6 * 24 * 60 * 60 * 1000)
-      ).toISOString().slice(0, 19);
+      ).toISOString();
       const date = new Date(timestamp);
 
       return {
@@ -1248,7 +1257,7 @@ export default function App() {
         userId:         USERS[Math.floor(Math.random() * USERS.length)],
         deviceId:       DEVICES[Math.floor(Math.random() * DEVICES.length)],
         employeeId:     Math.random() < 0.55 ? EMPLOYEES[Math.floor(Math.random() * EMPLOYEES.length)] : null,
-        timestamp:      new Date().toISOString().slice(0, 19),
+        timestamp:      new Date().toISOString(),
         amount:         base.amount,
         logAmount:      parseFloat(Math.log(base.amount + 1).toFixed(6)),
         hour:           base.hour,
@@ -1341,23 +1350,30 @@ export default function App() {
   const socAlerts = alerts.filter(a => a.alert_soc);
 
   return (
-    <div className="app">
+    <div className={`app theme-${theme}`}>
       <ExplanationPopup popup={explanationPopup} onClose={() => setExplanationPopup(null)} />
       {/* Header */}
       <header className="header">
         <div className="header-left">
           <div className="logo">
-            <span className="logo-icon">â¬¡</span>
+            <span className="logo-icon">SN</span>
             <div>
-              <div className="logo-title">SENTINEL</div>
+              <div className="logo-title">SAFENET</div>
               <div className="logo-sub">AI Banking Security Operations Center</div>
             </div>
           </div>
         </div>
         <div className="header-right">
+          <button
+            className="theme-toggle"
+            type="button"
+            onClick={() => setTheme((prev) => (prev === 'light' ? 'dark' : 'light'))}
+          >
+            {theme === 'light' ? 'DARK MODE' : 'LIGHT MODE'}
+          </button>
           {socAlerts.length > 0 && (
             <div className="soc-alert-badge">
-              ðŸ”´ {socAlerts.length} SOC ALERT{socAlerts.length > 1 ? 'S' : ''}
+              {socAlerts.length} SOC ALERT{socAlerts.length > 1 ? 'S' : ''}
             </div>
           )}
         </div>
@@ -1408,7 +1424,7 @@ export default function App() {
           {panel === 1 && (
             <div className="panel-full">
               <div className="panel-header">
-                <span className="panel-title">RISK TIMELINE â€” 24H</span>
+                <span className="panel-title">RISK TIMELINE - 24H</span>
               </div>
               <span className="panel-sub">{dataSource}</span>
               <span className="panel-sub">{fmtUpdate(panelUpdated.timeline)}</span>
