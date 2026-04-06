@@ -14,12 +14,22 @@ React dashboard (:3000)
     -> FastAPI ML service (:8000/*)
 ```
 
-The dashboard is now live-only:
+## Dashboard Behavior
 
-- no UI mock bootstrap
-- no fake fallback alerts or login anomalies
-- no background auto-generated events
-- visible results are based on values submitted through the full React -> Spring -> Python -> Spring -> React round trip
+The dashboard is intended to be live-only.
+
+What that means:
+
+- no UI mock bootstrap:
+  the frontend should not open with fake alerts, fake SHAP results, fake graph states, or fake login anomalies just to make the screen look active
+- no fake fallback alerts or login anomalies:
+  if Spring Boot or the Python ML service is unavailable, the UI should show the failure state instead of inventing a local fraud result
+- no background auto-generated events:
+  the dashboard should not silently create random transactions or logins only to keep panels moving
+- visible results come from the real full pipeline:
+  React form input -> Spring Boot -> Python ML service -> Spring Boot -> React render
+
+In other words, whatever appears on the dashboard should be based on values that were actually submitted and actually scored by the backend services.
 
 ## Main Flows
 
