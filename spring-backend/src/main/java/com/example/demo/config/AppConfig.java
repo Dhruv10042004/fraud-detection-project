@@ -20,6 +20,9 @@ public class AppConfig {
     @Value("${app.ml.read-timeout:15000}")
     private int readTimeout;
 
+    @Value("${app.cors.allowed-origins:http://localhost:3000}")
+    private String[] allowedOrigins;
+
     @Bean
     public RestTemplate restTemplate(ObjectMapper objectMapper) {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
@@ -41,7 +44,7 @@ public class AppConfig {
             @Override
             public void addCorsMappings(CorsRegistry registry) {
                 registry.addMapping("/fraud/**")
-                        .allowedOrigins("http://localhost:3000")
+                        .allowedOrigins(allowedOrigins)
                         .allowedMethods("GET", "POST", "OPTIONS")
                         .allowedHeaders("*");
             }
