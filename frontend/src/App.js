@@ -335,9 +335,9 @@ function StatusBar({ online, alertCount, modelInfo }) {
         <span className={`dot ${online ? 'dot-green' : 'dot-red'}`} />
         <span className="status-text">ML SERVICE {online ? 'ONLINE' : 'OFFLINE'}</span>
         <span className="sep">|</span>
-        <span className="status-text">SPRING BOOT :8080</span>
+        <span className="status-text">SPRING API</span>
         <span className="sep">|</span>
-        <span className="status-text">PYTHON ML :8000</span>
+        <span className="status-text">PYTHON ML VIA SPRING</span>
       </div>
       <div className="status-right">
         {modelInfo && (
