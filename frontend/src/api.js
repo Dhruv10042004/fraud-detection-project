@@ -1,4 +1,4 @@
-const BASE = process.env.REACT_APP_API_URL || 'http://localhost:8080';
+const BASE = (process.env.REACT_APP_API_URL || 'http://localhost:8080').replace(/\/$/, '');
 
 async function request(method, path, body) {
   const opts = { method, headers: {} };
