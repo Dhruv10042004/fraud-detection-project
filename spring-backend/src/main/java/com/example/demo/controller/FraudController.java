@@ -20,7 +20,6 @@ import java.util.Map;
  * │ React → Spring Boot (:8080/fraud/*) → Python ML (:8000/*) │
  * └─────────────────────────────────────────────────────────────────────┘
  */
-@CrossOrigin(origins = "*")
 @RestController
 @RequestMapping("/fraud")
 public class FraudController {
